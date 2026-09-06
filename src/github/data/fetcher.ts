@@ -22,6 +22,12 @@ import type {
 import type { CommentWithImages } from "../utils/image-downloader";
 import { downloadCommentImages } from "../utils/image-downloader";
 import {
+  fetchIssueDataViaRest,
+  fetchPullRequestDataViaRest,
+  fetchUserDisplayNameViaRest,
+  isGraphQLUnavailableError,
+} from "./rest-fetcher";
+import {
   parseActorFilter,
   resolveActorName,
   shouldIncludeCommentByActor,
@@ -413,65 +419,95 @@ export async function fetchGitHubData({
 
   try {
     if (isPR) {
-      // Fetch PR data with all comments and file information
-      const prResult = await octokits.graphql<PullRequestQueryResponse>(
-        PR_QUERY,
-        {
-          owner,
-          repo,
-          number: parseInt(prNumber),
-        },
-      );
-
-      if (prResult.repository.pullRequest) {
-        const pullRequest = prResult.repository.pullRequest;
-        contextData = pullRequest;
-        if (pullRequest.files === null) {
-          console.warn(
-            `GitHub did not return the file list for PR #${prNumber} (diff likely too large); proceeding without file-level context`,
-          );
+      // Fetch PR data with all comments and file information. Falls back to
+      // REST (Gitea has no GraphQL API) when the GraphQL endpoint itself is
+      // unavailable, rather than when GitHub's GraphQL API returns a genuine
+      // error — see isGraphQLUnavailableError().
+      let pullRequest: GitHubPullRequest;
+      try {
+        const prResult = await octokits.graphql<PullRequestQueryResponse>(
+          PR_QUERY,
+          {
+            owner,
+            repo,
+            number: parseInt(prNumber),
+          },
+        );
+        if (!prResult.repository.pullRequest) {
+          throw new Error(`PR #${prNumber} not found`);
         }
-        changedFiles = pullRequest.files?.nodes ?? [];
-        comments = filterCommentsByActor(
-          filterCommentsToTriggerTime(
-            pullRequest.comments?.nodes || [],
-            triggerTime,
-          ),
-          includeCommentsByActor,
-          excludeCommentsByActor,
+        pullRequest = prResult.repository.pullRequest;
+      } catch (graphqlError) {
+        if (!isGraphQLUnavailableError(graphqlError)) throw graphqlError;
+        console.log(
+          "GraphQL endpoint unavailable, falling back to REST for PR data",
         );
-        reviewData = pullRequest.reviews || { nodes: [] };
-
-        console.log(`Successfully fetched PR #${prNumber} data`);
-      } else {
-        throw new Error(`PR #${prNumber} not found`);
-      }
-    } else {
-      // Fetch issue data
-      const issueResult = await octokits.graphql<IssueQueryResponse>(
-        ISSUE_QUERY,
-        {
+        pullRequest = await fetchPullRequestDataViaRest(
+          octokits,
           owner,
           repo,
-          number: parseInt(prNumber),
-        },
+          parseInt(prNumber),
+        );
+      }
+
+      contextData = pullRequest;
+      if (pullRequest.files === null) {
+        console.warn(
+          `GitHub did not return the file list for PR #${prNumber} (diff likely too large); proceeding without file-level context`,
+        );
+      }
+      changedFiles = pullRequest.files?.nodes ?? [];
+      comments = filterCommentsByActor(
+        filterCommentsToTriggerTime(
+          pullRequest.comments?.nodes || [],
+          triggerTime,
+        ),
+        includeCommentsByActor,
+        excludeCommentsByActor,
+      );
+      reviewData = pullRequest.reviews || { nodes: [] };
+
+      console.log(`Successfully fetched PR #${prNumber} data`);
+    } else {
+      // Fetch issue data. Same GraphQL-unavailable fallback as the PR path.
+      let issue: GitHubIssue;
+      try {
+        const issueResult = await octokits.graphql<IssueQueryResponse>(
+          ISSUE_QUERY,
+          {
+            owner,
+            repo,
+            number: parseInt(prNumber),
+          },
+        );
+        if (!issueResult.repository.issue) {
+          throw new Error(`Issue #${prNumber} not found`);
+        }
+        issue = issueResult.repository.issue;
+      } catch (graphqlError) {
+        if (!isGraphQLUnavailableError(graphqlError)) throw graphqlError;
+        console.log(
+          "GraphQL endpoint unavailable, falling back to REST for issue data",
+        );
+        issue = await fetchIssueDataViaRest(
+          octokits,
+          owner,
+          repo,
+          parseInt(prNumber),
+        );
+      }
+
+      contextData = issue;
+      comments = filterCommentsByActor(
+        filterCommentsToTriggerTime(
+          contextData?.comments?.nodes || [],
+          triggerTime,
+        ),
+        includeCommentsByActor,
+        excludeCommentsByActor,
       );
 
-      if (issueResult.repository.issue) {
-        contextData = issueResult.repository.issue;
-        comments = filterCommentsByActor(
-          filterCommentsToTriggerTime(
-            contextData?.comments?.nodes || [],
-            triggerTime,
-          ),
-          includeCommentsByActor,
-          excludeCommentsByActor,
-        );
-
-        console.log(`Successfully fetched issue #${prNumber} data`);
-      } else {
-        throw new Error(`Issue #${prNumber} not found`);
-      }
+      console.log(`Successfully fetched issue #${prNumber} data`);
     }
   } catch (error) {
     console.error(`Failed to fetch ${isPR ? "PR" : "issue"} data:`, error);
@@ -656,7 +692,10 @@ export async function fetchUserDisplayName(
     });
     return result.user.name;
   } catch (error) {
-    console.warn(`Failed to fetch user display name for ${login}:`, error);
-    return null;
+    if (!isGraphQLUnavailableError(error)) {
+      console.warn(`Failed to fetch user display name for ${login}:`, error);
+      return null;
+    }
+    return fetchUserDisplayNameViaRest(octokits, login);
   }
 }
