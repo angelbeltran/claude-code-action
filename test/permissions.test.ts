@@ -404,6 +404,126 @@ describe("checkWritePermissions", () => {
     });
   });
 
+  describe("Gitea collaborator-permission 403 fallback", () => {
+    // Gitea's collaborator-permission endpoint 403s with "Only admins can
+    // query all permissions, repo admins can query all repo permissions,
+    // collaborators can query only their own" for some token/actor
+    // combinations that do have write access (observed for the repo owner).
+    // The fallback re-derives access from the repo GET response's
+    // `permissions` field, which always reflects the authenticated token's
+    // own access and isn't subject to that restriction.
+
+    const create403Error = () => {
+      const err = new Error(
+        "HttpError: Only admins can query all permissions, repo admins can query all repo permissions, collaborators can query only their own",
+      );
+      (err as any).status = 403;
+      return err;
+    };
+
+    test("grants access when the checked actor is the authenticated token's own account with push access", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw create403Error();
+          },
+          get: async () => ({ data: { permissions: { push: true } } }),
+        },
+        users: {
+          getAuthenticated: async () => ({ data: { login: "test-user" } }),
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      const result = await checkWritePermissions(mockOctokit, context);
+
+      expect(result).toBe(true);
+    });
+
+    test("grants access when the token's own account has admin access", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw create403Error();
+          },
+          get: async () => ({ data: { permissions: { admin: true } } }),
+        },
+        users: {
+          getAuthenticated: async () => ({ data: { login: "test-user" } }),
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      const result = await checkWritePermissions(mockOctokit, context);
+
+      expect(result).toBe(true);
+    });
+
+    test("denies access when the token's own account has no push/admin access", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw create403Error();
+          },
+          get: async () => ({ data: { permissions: { pull: true } } }),
+        },
+        users: {
+          getAuthenticated: async () => ({ data: { login: "test-user" } }),
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      const result = await checkWritePermissions(mockOctokit, context);
+
+      expect(result).toBe(false);
+    });
+
+    test("does not apply the fallback when the checked actor differs from the authenticated token's account", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw create403Error();
+          },
+          get: async () => ({ data: { permissions: { push: true } } }),
+        },
+        users: {
+          getAuthenticated: async () => ({ data: { login: "someone-else" } }),
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      await expect(checkWritePermissions(mockOctokit, context)).rejects.toThrow(
+        "Failed to check permissions for test-user",
+      );
+    });
+
+    test("rethrows the original error when the fallback lookup itself fails", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw create403Error();
+          },
+          get: async () => {
+            throw new Error("network error");
+          },
+        },
+        users: {
+          getAuthenticated: async () => ({ data: { login: "test-user" } }),
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      await expect(checkWritePermissions(mockOctokit, context)).rejects.toThrow(
+        "Failed to check permissions for test-user",
+      );
+    });
+  });
+
   describe("allowed_bots only applies to non-user actors", () => {
     // The permission endpoint resolves the actor's account type. Actors
     // that resolve to a regular user account go through the standard write

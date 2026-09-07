@@ -157,6 +157,46 @@ async function checkActorWritePermissions(
       return false;
     }
 
+    // Gitea's collaborator-permission endpoint is more restrictive than
+    // GitHub's: it 403s with "Only admins can query all permissions, repo
+    // admins can query all repo permissions, collaborators can query only
+    // their own" for some token/actor combinations that do in fact have
+    // write access (observed even for the repo owner). Since the repo GET
+    // response's `permissions` field always reflects the *authenticated
+    // token's own* access and isn't subject to that restriction, fall back
+    // to it when the checked actor is that same token's own account.
+    if ((error as { status?: number }).status === 403) {
+      try {
+        const [{ data: authedUser }, { data: repo }] = await Promise.all([
+          octokit.users.getAuthenticated(),
+          octokit.repos.get({
+            owner: repository.owner,
+            repo: repository.repo,
+          }),
+        ]);
+
+        if (authedUser.login.toLowerCase() === actor.toLowerCase()) {
+          const hasWriteAccess = Boolean(
+            repo.permissions?.push || repo.permissions?.admin,
+          );
+          core.info(
+            `Collaborator-permission lookup was forbidden; actor ${actor} is the authenticated token's own account, ` +
+              `which reports push=${repo.permissions?.push} admin=${repo.permissions?.admin} on this repo`,
+          );
+          if (hasWriteAccess) return true;
+          core.warning(
+            `Actor ${actor} (token owner) has no push/admin access to the repository`,
+          );
+          return false;
+        }
+      } catch (fallbackError) {
+        core.warning(
+          `Fallback permission check via repo GET also failed: ${fallbackError}`,
+        );
+        // Fall through to the original error below.
+      }
+    }
+
     core.error(`Failed to check permissions: ${error}`);
     throw new Error(`Failed to check permissions for ${actor}: ${error}`);
   }
