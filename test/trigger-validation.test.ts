@@ -469,6 +469,55 @@ describe("checkContainsTrigger", () => {
         expect(checkContainsTrigger(context)).toBe(expected);
       });
     });
+
+    it("should handle Gitea's markdown-link auto-mention of the trigger phrase", () => {
+      // Gitea (unlike GitHub) rewrites @username mentions typed in its web UI
+      // into markdown links, so a comment body that starts as "@claude ..."
+      // is actually delivered to webhooks/Actions as
+      // "[@claude](https://host/claude) ...". The bare "(^|\s)...([\s.,!?;:]|$)"
+      // boundary check misses this since the phrase is bounded by `[`/`]`,
+      // not whitespace. See https://gitea.inventory-plus-plus.com — a real
+      // instance where this caused tag mode to silently no-op.
+      const baseContext = {
+        ...mockIssueCommentContext,
+        inputs: {
+          ...mockIssueCommentContext.inputs,
+          triggerPhrase: "@claude",
+        },
+      };
+
+      const testCases = [
+        {
+          commentBody:
+            "[@claude](https://gitea.example.com/claude) can you take a look?",
+          expected: true,
+        },
+        {
+          commentBody: "please see [@claude](https://gitea.example.com/claude)",
+          expected: true,
+        },
+        // Still must not match a mention of an unrelated linked user.
+        {
+          commentBody:
+            "[@someone-else](https://gitea.example.com/someone-else)",
+          expected: false,
+        },
+      ];
+
+      testCases.forEach(({ commentBody, expected }) => {
+        const context = {
+          ...baseContext,
+          payload: {
+            ...baseContext.payload,
+            comment: {
+              ...(baseContext.payload as IssueCommentEvent).comment,
+              body: commentBody,
+            },
+          },
+        } as ParsedGitHubContext;
+        expect(checkContainsTrigger(context)).toBe(expected);
+      });
+    });
   });
 });
 

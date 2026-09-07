@@ -11,6 +11,24 @@ import {
 } from "../context";
 import type { ParsedGitHubContext } from "../context";
 
+/**
+ * Builds the regex used to detect a bare trigger-phrase mention in free-form
+ * text (issue/PR body or title, review body, comment body).
+ *
+ * The boundary character classes include `[`/`]` in addition to whitespace
+ * and punctuation because Gitea (unlike GitHub) rewrites `@username`
+ * mentions typed in its web UI into markdown links — `@claude` becomes
+ * `[@claude](https://.../claude)` in the comment body actually delivered to
+ * webhooks/Actions — so the phrase is immediately preceded by `[` and
+ * followed by `]` rather than by whitespace.
+ */
+function buildTriggerPhraseRegex(triggerPhrase: string): RegExp {
+  return new RegExp(
+    `(^|\\s|\\[)${escapeRegExp(triggerPhrase)}([\\s.,!?;:\\]]|$)`,
+    "i",
+  );
+}
+
 export function checkContainsTrigger(context: ParsedGitHubContext): boolean {
   const {
     inputs: { assigneeTrigger, labelTrigger, triggerPhrase, prompt },
@@ -52,10 +70,7 @@ export function checkContainsTrigger(context: ParsedGitHubContext): boolean {
     const issueBody = context.payload.issue.body || "";
     const issueTitle = context.payload.issue.title || "";
     // Check for exact match with word boundaries or punctuation
-    const regex = new RegExp(
-      `(^|\\s)${escapeRegExp(triggerPhrase)}([\\s.,!?;:]|$)`,
-      "i",
-    );
+    const regex = buildTriggerPhraseRegex(triggerPhrase);
 
     // Check in body
     if (regex.test(issueBody)) {
@@ -79,10 +94,7 @@ export function checkContainsTrigger(context: ParsedGitHubContext): boolean {
     const prBody = context.payload.pull_request.body || "";
     const prTitle = context.payload.pull_request.title || "";
     // Check for exact match with word boundaries or punctuation
-    const regex = new RegExp(
-      `(^|\\s)${escapeRegExp(triggerPhrase)}([\\s.,!?;:]|$)`,
-      "i",
-    );
+    const regex = buildTriggerPhraseRegex(triggerPhrase);
 
     // Check in body
     if (regex.test(prBody)) {
@@ -108,10 +120,7 @@ export function checkContainsTrigger(context: ParsedGitHubContext): boolean {
   ) {
     const reviewBody = context.payload.review.body || "";
     // Check for exact match with word boundaries or punctuation
-    const regex = new RegExp(
-      `(^|\\s)${escapeRegExp(triggerPhrase)}([\\s.,!?;:]|$)`,
-      "i",
-    );
+    const regex = buildTriggerPhraseRegex(triggerPhrase);
     if (regex.test(reviewBody)) {
       console.log(
         `Pull request review contains exact trigger phrase '${triggerPhrase}'`,
@@ -129,10 +138,7 @@ export function checkContainsTrigger(context: ParsedGitHubContext): boolean {
       ? context.payload.comment.body
       : context.payload.comment.body;
     // Check for exact match with word boundaries or punctuation
-    const regex = new RegExp(
-      `(^|\\s)${escapeRegExp(triggerPhrase)}([\\s.,!?;:]|$)`,
-      "i",
-    );
+    const regex = buildTriggerPhraseRegex(triggerPhrase);
     if (regex.test(commentBody)) {
       console.log(`Comment contains exact trigger phrase '${triggerPhrase}'`);
       return true;
