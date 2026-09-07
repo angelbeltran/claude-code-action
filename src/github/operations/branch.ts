@@ -24,6 +24,42 @@ function extractFirstLabel(githubData: FetchDataResult): string | undefined {
 }
 
 /**
+ * Resolves a branch's head SHA. GitHub exposes this via the singular
+ * `GET /git/ref/{ref}`, which Octokit's `git.getRef()` calls directly.
+ * Gitea has no such endpoint (confirmed against a live Gitea 1.27 instance's
+ * OpenAPI spec) - it only implements the plural `GET /git/refs/{ref}`, which
+ * always returns an array of matching refs (prefix-matching git plumbing
+ * semantics), so an exact match on `refs/heads/<branch>` has to be picked
+ * out by hand. Falls back to that only on 404, so GitHub's behavior (and a
+ * genuine "branch does not exist" error there) is unchanged.
+ */
+export async function getBranchSha(
+  octokits: Octokits,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<string> {
+  const ref = `heads/${branch}`;
+  try {
+    const { data } = await octokits.rest.git.getRef({ owner, repo, ref });
+    return data.object.sha;
+  } catch (error: any) {
+    if (error?.status !== 404) throw error;
+    const { data: refs } = await octokits.rest.request(
+      "GET /repos/{owner}/{repo}/git/refs/{ref}",
+      { owner, repo, ref },
+    );
+    const exact = (
+      refs as unknown as Array<{ ref: string; object: { sha: string } }>
+    ).find((r) => r.ref === `refs/${ref}`);
+    if (!exact) {
+      throw new Error(`Branch '${branch}' not found in ${owner}/${repo}`);
+    }
+    return exact.object.sha;
+  }
+}
+
+/**
  * Validates a git branch name against a strict whitelist pattern.
  * This prevents command injection by ensuring only safe characters are used.
  *
@@ -251,13 +287,7 @@ export async function setupBranch(
 
   try {
     // Get the SHA of the source branch to verify it exists
-    const sourceBranchRef = await octokits.rest.git.getRef({
-      owner,
-      repo,
-      ref: `heads/${sourceBranch}`,
-    });
-
-    sourceSHA = sourceBranchRef.data.object.sha;
+    sourceSHA = await getBranchSha(octokits, owner, repo, sourceBranch);
     console.log(`Source branch SHA: ${sourceSHA}`);
 
     // Extract first label from GitHub data
