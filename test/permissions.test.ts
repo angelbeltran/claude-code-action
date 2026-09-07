@@ -501,6 +501,45 @@ describe("checkWritePermissions", () => {
       );
     });
 
+    test("includes a hint about Gitea's automatic-token limitation on an unresolved 403", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw create403Error();
+          },
+          get: async () => ({ data: { permissions: { push: true } } }),
+        },
+        users: {
+          getAuthenticated: async () => ({ data: { login: "someone-else" } }),
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      await expect(checkWritePermissions(mockOctokit, context)).rejects.toThrow(
+        "docs.gitea.com/usage/actions/token-permissions",
+      );
+    });
+
+    test("does not add the Gitea hint for non-403 errors", async () => {
+      const mockOctokit = {
+        repos: {
+          getCollaboratorPermissionLevel: async () => {
+            throw new Error("Internal Server Error");
+          },
+        },
+      } as any;
+      const context = createContext();
+      context.actor = "test-user";
+
+      try {
+        await checkWritePermissions(mockOctokit, context);
+        throw new Error("expected checkWritePermissions to throw");
+      } catch (error) {
+        expect(String(error)).not.toContain("docs.gitea.com");
+      }
+    });
+
     test("rethrows the original error when the fallback lookup itself fails", async () => {
       const mockOctokit = {
         repos: {

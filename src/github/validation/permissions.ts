@@ -165,6 +165,7 @@ async function checkActorWritePermissions(
     // response's `permissions` field always reflects the *authenticated
     // token's own* access and isn't subject to that restriction, fall back
     // to it when the checked actor is that same token's own account.
+    let usedGiteaAutomaticTokenHint = false;
     if ((error as { status?: number }).status === 403) {
       try {
         const [{ data: authedUser }, { data: repo }] = await Promise.all([
@@ -189,15 +190,39 @@ async function checkActorWritePermissions(
           );
           return false;
         }
+        core.info(
+          `Collaborator-permission lookup was forbidden, and actor ${actor} differs from the authenticated ` +
+            `token's own account (${authedUser.login}); the fallback via repo GET only reveals the token's ` +
+            `own access, not ${actor}'s, so it cannot be used here.`,
+        );
       } catch (fallbackError) {
         core.warning(
           `Fallback permission check via repo GET also failed: ${fallbackError}`,
         );
         // Fall through to the original error below.
       }
+      // Gitea's built-in per-job Actions token (the value Gitea injects when
+      // a workflow references `secrets.GITHUB_TOKEN`/a repo secret populated
+      // from it) has no "administration" scope in its permission model at
+      // all (see https://docs.gitea.com/usage/actions/token-permissions/) —
+      // no `permissions:` block in the workflow can grant it rights to query
+      // another user's collaborator permission, and it isn't tied to a real
+      // user account for the fallback above to match against either. This
+      // 403 is the signature of that structural limitation, not something a
+      // workflow permissions change can fix.
+      usedGiteaAutomaticTokenHint = true;
     }
 
     core.error(`Failed to check permissions: ${error}`);
-    throw new Error(`Failed to check permissions for ${actor}: ${error}`);
+    const giteaHint = usedGiteaAutomaticTokenHint
+      ? " If this token is Gitea's built-in per-job Actions token, note that it has no 'administration' " +
+        "scope and can never query another user's collaborator permission (see " +
+        "https://docs.gitea.com/usage/actions/token-permissions/) — use a real personal/bot access token " +
+        "with repo-admin rights as github_token instead, or set allowed_non_write_users to bypass this " +
+        "check for trusted actors."
+      : "";
+    throw new Error(
+      `Failed to check permissions for ${actor}: ${error}${giteaHint}`,
+    );
   }
 }
