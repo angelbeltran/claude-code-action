@@ -44,7 +44,16 @@ export function checkContainsTrigger(context: ParsedGitHubContext): boolean {
   if (isIssuesAssignedEvent(context)) {
     // Remove @ symbol from assignee_trigger if present
     let triggerUser = assigneeTrigger.replace(/^@/, "");
-    const assigneeUsername = context.payload.assignee?.login || "";
+    // GitHub's "assigned" webhook payload has a top-level `assignee` field
+    // naming the user just added. Gitea's does not (confirmed against
+    // upstream Gitea's IssuePayload/Issue structs) - it's only populated
+    // nested under `issue.assignee`. Prefer the top-level field (GitHub's
+    // precise "who was just assigned" signal) and fall back to the nested
+    // one so Gitea's shape is also recognized.
+    const assigneeUsername =
+      context.payload.assignee?.login ||
+      (context.payload as any).issue?.assignee?.login ||
+      "";
 
     if (triggerUser && assigneeUsername === triggerUser) {
       console.log(`Issue assigned to trigger user '${triggerUser}'`);

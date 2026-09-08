@@ -112,6 +112,40 @@ describe("checkContainsTrigger", () => {
 
       expect(checkContainsTrigger(context)).toBe(false);
     });
+
+    it("should recognize the trigger user via Gitea's assignee shape (nested under issue only, no top-level field)", () => {
+      // Gitea's "issues" assigned webhook payload has no top-level `assignee`
+      // field (confirmed against upstream Gitea's IssuePayload/Issue structs)
+      // - only `issue.assignee` is populated.
+      const { assignee: _dropped, ...payloadWithoutTopLevelAssignee } =
+        mockIssueAssignedContext.payload as IssuesAssignedEvent;
+      const context = {
+        ...mockIssueAssignedContext,
+        payload: payloadWithoutTopLevelAssignee,
+      } as ParsedGitHubContext;
+
+      expect(checkContainsTrigger(context)).toBe(true);
+    });
+
+    it("should return false for Gitea's assignee shape when the nested assignee differs from the trigger user", () => {
+      const { assignee: _dropped, ...payloadWithoutTopLevelAssignee } =
+        mockIssueAssignedContext.payload as IssuesAssignedEvent;
+      const context = {
+        ...mockIssueAssignedContext,
+        payload: {
+          ...payloadWithoutTopLevelAssignee,
+          issue: {
+            ...payloadWithoutTopLevelAssignee.issue,
+            assignee: {
+              ...payloadWithoutTopLevelAssignee.issue.assignee,
+              login: "otherUser",
+            },
+          },
+        },
+      } as ParsedGitHubContext;
+
+      expect(checkContainsTrigger(context)).toBe(false);
+    });
   });
 
   describe("label trigger", () => {
