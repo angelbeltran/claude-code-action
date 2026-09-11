@@ -122,14 +122,14 @@ export async function replaceCheckoutCredentials(
       '#!/bin/sh\necho username=x-access-token\necho password="$GH_TOKEN"\n',
       { mode: 0o700 },
     );
-    const cleanUrl = `https://${serverUrl.host}/${context.repository.owner}/${context.repository.repo}.git`;
+    const cleanUrl = `${serverUrl.protocol}//${serverUrl.host}/${context.repository.owner}/${context.repository.repo}.git`;
     await $`git remote set-url origin ${cleanUrl}`;
     await $`git config credential.helper ${helperPath}`;
     console.log("✓ Configured credential helper");
   } else {
     // Update the remote URL to include the token for authentication
     console.log("Updating remote URL with authentication...");
-    const remoteUrl = `https://x-access-token:${githubToken}@${serverUrl.host}/${context.repository.owner}/${context.repository.repo}.git`;
+    const remoteUrl = `${serverUrl.protocol}//x-access-token:${githubToken}@${serverUrl.host}/${context.repository.owner}/${context.repository.repo}.git`;
     await $`git remote set-url origin ${remoteUrl}`;
     console.log("✓ Updated remote URL with authentication token");
   }

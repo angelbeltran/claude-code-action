@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, rmSync, statSync } from "fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -158,6 +158,42 @@ describe("git-config", () => {
       ).resolves.toBeUndefined();
 
       expect(remoteUrl()).toContain("x-access-token:test-token@");
+    });
+
+    test("preserves a plain-http GITHUB_SERVER_URL instead of forcing https", async () => {
+      // Some self-hosted Gitea instances only serve http (e.g. an internal
+      // ROOT_URL like http://192.168.0.100:3000 with no TLS termination).
+      // Forcing https here breaks every push with a TLS handshake error.
+      // GITHUB_SERVER_URL is bound to a module-level const at import time, so
+      // this runs in a fresh subprocess rather than fighting Bun's module cache.
+      const gitConfigPath = join(
+        import.meta.dir,
+        "..",
+        "src/github/operations/git-config",
+      );
+      const mockContextPath = join(import.meta.dir, "mockContext");
+      const scriptPath = join(tempDir, "run-replace-credentials.ts");
+      writeFileSync(
+        scriptPath,
+        [
+          `import { replaceCheckoutCredentials } from ${JSON.stringify(gitConfigPath)};`,
+          `import { createMockAutomationContext } from ${JSON.stringify(mockContextPath)};`,
+          'await replaceCheckoutCredentials("test-token", createMockAutomationContext());',
+        ].join("\n"),
+      );
+
+      execFileSync("bun", ["run", scriptPath], {
+        cwd: repoDir,
+        stdio: "pipe",
+        env: {
+          ...process.env,
+          GITHUB_SERVER_URL: "http://192.168.0.100:3000",
+        },
+      });
+
+      expect(remoteUrl()).toBe(
+        "http://x-access-token:test-token@192.168.0.100:3000/test-owner/test-repo.git",
+      );
     });
   });
 
